@@ -778,6 +778,7 @@ def _logs_macos():
 
 # ── Linux ──────────────────────────────────
 
+def _logs_linux():
     log_candidates = ["/var/log/auth.log", "/var/log/secure"]
 
     parsed = False
