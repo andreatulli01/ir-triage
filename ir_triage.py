@@ -306,42 +306,81 @@ def module_persistence():
 # ── macOS ──────────────────────────────────
 
 def _persistence_macos():
-    # 1. LaunchAgents / LaunchDaemons (macOS equivalent of cron + systemd)
+    import re as _re
+    # 1. LaunchAgents / LaunchDaemons
+    # Strategy: parse each plist and inspect what it actually RUNS
+    # Flag only if the binary path is suspicious — not just because it's non-Apple
     launch_paths = [
-        (os.path.expanduser("~/Library/LaunchAgents"),   "User LaunchAgents"),
-        ("/Library/LaunchAgents",                         "System LaunchAgents"),
-        ("/Library/LaunchDaemons",                        "System LaunchDaemons"),
-        ("/System/Library/LaunchAgents",                  "macOS LaunchAgents (system)"),
-        ("/System/Library/LaunchDaemons",                 "macOS LaunchDaemons (system)"),
+        (os.path.expanduser("~/Library/LaunchAgents"),  "User LaunchAgents"),
+        ("/Library/LaunchAgents",                        "System LaunchAgents"),
+        ("/Library/LaunchDaemons",                       "System LaunchDaemons"),
     ]
 
-    # Known Apple/system plist prefixes — skip these to reduce noise
-    apple_prefixes = (
-        "com.apple.", "com.openssh.", "com.cups.", "org.ntp.",
-        "org.postfix.", "com.microsoft.", "com.adobe.", "com.google.",
-    )
+    # Paths that are always suspicious for a binary to live in
+    suspicious_bin_paths = [
+        "/tmp/", "/var/tmp/", "/private/tmp/",
+        "/Users/Shared/",
+        os.path.expanduser("~/Downloads/"),
+        os.path.expanduser("~/Library/Caches/"),
+    ]
+
+    # Suspicious commands in plist args
+    suspicious_patterns = [
+        "curl", "wget", "bash -i", "python -c", "python3 -c",
+        "base64", "ncat", "netcat",
+    ]
+
+    # Gibberish: short name with no dots (no reverse-domain format)
+    gibberish_re = _re.compile(r'^[a-zA-Z0-9_-]{4,16}\.plist$')
 
     print(f"  {bold('[ LaunchAgents / LaunchDaemons ]')}")
-    found_any = False
+    flagged_any = False
+
     for path, label in launch_paths:
         if not os.path.isdir(path):
             continue
         try:
             plists = [f for f in os.listdir(path) if f.endswith(".plist")]
-            non_apple = [p for p in plists if not any(p.startswith(ap) for ap in apple_prefixes)]
-            if non_apple:
-                warn(f"{label} ({path}):")
-                for p in non_apple:
-                    full = os.path.join(path, p)
-                    print(f"    → {yellow(p)}")
-                    add_finding("MEDIUM", "Persistence",
-                                f"Non-Apple LaunchAgent/Daemon: {full}")
-                found_any = True
+            for plist_name in plists:
+                full_path = os.path.join(path, plist_name)
+                reasons = []
+                base = plist_name.replace(".plist", "")
+
+                # Check 1: gibberish filename (no dots = no reverse-domain = suspicious)
+                if gibberish_re.match(plist_name) and "." not in base:
+                    reasons.append("unusual filename — no reverse-domain format")
+
+                # Check 2: parse plist and inspect binary path and args
+                try:
+                    result = subprocess.run(
+                        ["plutil", "-convert", "xml1", "-o", "-", full_path],
+                        capture_output=True, text=True, timeout=3
+                    )
+                    content = result.stdout
+                    for sus in suspicious_bin_paths:
+                        if sus in content:
+                            reasons.append(f"binary in suspicious path: {sus.rstrip('/')}")
+                    for pat in suspicious_patterns:
+                        if pat in content:
+                            reasons.append(f"suspicious argument: '{pat}'")
+                except Exception:
+                    pass
+
+                if reasons:
+                    severity = "HIGH" if len(reasons) > 1 else "MEDIUM"
+                    flag(f"{plist_name}")
+                    for r in reasons:
+                        print(f"      reason: {red(r)}")
+                    add_finding(severity, "Persistence",
+                                f"Suspicious LaunchAgent: {full_path} — {'; '.join(reasons)}")
+                    flagged_any = True
+
         except PermissionError:
             warn(f"{label}: permission denied")
 
-    if not found_any:
-        ok("No non-Apple LaunchAgents or LaunchDaemons found")
+    if not flagged_any:
+        ok("No suspicious LaunchAgents or LaunchDaemons detected")
+
 
     # 2. Login Items (via osascript)
     print(f"\n  {bold('[ Login Items ]')}")
@@ -354,9 +393,30 @@ def _persistence_macos():
         items_raw = result.stdout.strip()
         if items_raw:
             items = [i.strip() for i in items_raw.split(",") if i.strip()]
+            # Known legitimate login item names — just list them, don't flag
+            known_safe = {
+                "dropbox", "steam", "zoom", "slack", "spotify", "1password",
+                "alfred", "bartender", "rectangle", "magnet", "amphetamine",
+                "nordvpn", "expressvpn", "tunnelblick", "viscosity",
+                "lm studio", "warp", "iterm2", "nova", "tower", "fork",
+                "visual studio code", "cursor", "figma", "notion",
+                "google drive", "onedrive", "box", "creative cloud",
+                "backblaze", "carbon copy cloner", "superduper",
+            }
+            suspicious_items = []
             for item in items:
-                print(f"    → {yellow(item)}")
-                add_finding("LOW", "Persistence", f"Login item: {item}")
+                item_lower = item.lower()
+                if any(safe in item_lower for safe in known_safe):
+                    print(f"    {green('→')} {item} (known app)")
+                elif item.endswith(".exe"):
+                    print(f"    {red('→')} {item}")
+                    suspicious_items.append(item)
+                    add_finding("HIGH", "Persistence",
+                                f"Login item with .exe extension on macOS: {item}")
+                else:
+                    print(f"    {yellow('→')} {item} (unknown — verify manually)")
+                    suspicious_items.append(item)
+                    add_finding("LOW", "Persistence", f"Unrecognised login item: {item}")
         else:
             ok("No login items found")
     except Exception:
