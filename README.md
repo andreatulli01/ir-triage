@@ -31,11 +31,17 @@ Modules
 | Module | What it checks |
 
 | 1 | System Info | Hostname, OS, uptime, privilege level |
+
 | 2 | Running Processes | All processes flagged against known malware names |
+
 | 3 | Network Connections | Active connections, external IPs, suspicious ports |
+
 | 4 | Persistence Mechanisms | LaunchAgents, cron, systemd, registry run keys, startup folder, shell files |
+
 | 5 | Log Analysis | Failed logins, sudo usage, SSH attempts |
+
 | 6 | Process Hashes | SHA-256 + MD5 of all running executables |
+
 | 7 | Threat Intel | VirusTotal hash lookup + AbuseIPDB IP reputation (optional) |
 
 Severity Scoring
