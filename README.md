@@ -55,7 +55,7 @@ Quickstart
 
 ```bash
 # 1. Clone
-git clone https://github.com/YOUR_USERNAME/ir-triage.git
+git clone https://github.com/andreatulli01/ir-triage.git
 cd ir-triage
 
 # 2. Install dependencies
